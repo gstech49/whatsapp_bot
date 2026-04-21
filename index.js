@@ -15,7 +15,6 @@ async function getMenuFromApp() {
     const data = await response.json();
     if (!data) return [];
 
-    // Convert Firebase object into an array (now includes imageUrl)
     return Object.keys(data).map(key => ({
       id: key,
       name: data[key].name,
@@ -35,37 +34,47 @@ async function startBot() {
   }
 
   const { state, saveCreds } = await useMultiFileAuthState('auth_info');
-
   const { version } = await fetchLatestBaileysVersion();
 
   const sock = makeWASocket({
     version,
     auth: state,
     logger: pino({ level: 'silent' }),
-    printQRInTerminal: false,
+    printQRInTerminal: true, // ✅ Show QR locally, ignored in GitHub Actions
   });
 
   // Save credentials on update
   sock.ev.on('creds.update', saveCreds);
 
-  // QR Code generation
+  // Connection handler
   sock.ev.on('connection.update', (update) => {
     const { connection, lastDisconnect, qr } = update;
 
     if (qr) {
+      // Only runs locally — GitHub Actions has session restored
       qrcode.generate(qr, { small: true });
       console.log('📱 Scan the QR code above to connect WhatsApp!');
     }
 
     if (connection === 'close') {
-      const shouldReconnect =
-        lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
-      console.log('Connection closed. Reconnecting:', shouldReconnect);
-      if (shouldReconnect) {
-        startBot();
+      const statusCode = lastDisconnect?.error?.output?.statusCode;
+      const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
+
+      console.log('❌ Connection closed. Status:', statusCode);
+
+      if (statusCode === DisconnectReason.loggedOut) {
+        console.log('🚪 Logged out! Please regenerate session.');
+        process.exit(1); // ✅ Exit so GitHub Actions knows it failed
       }
+
+      if (shouldReconnect) {
+        console.log('🔄 Reconnecting...');
+        setTimeout(() => startBot(), 3000); // ✅ Wait 3s before reconnect
+      }
+
     } else if (connection === 'open') {
       console.log('✅ WhatsApp Bot connected successfully!');
+      // ✅ Bot stays alive for the full timeout duration
     }
   });
 
@@ -73,6 +82,9 @@ async function startBot() {
   sock.ev.on('messages.upsert', async ({ messages }) => {
     const msg = messages[0];
     if (!msg.message || msg.key.fromMe) return;
+
+    // ✅ Ignore status broadcasts
+    if (msg.key.remoteJid === 'status@broadcast') return;
 
     const sender = msg.key.remoteJid;
     const text =
@@ -82,7 +94,6 @@ async function startBot() {
 
     const lowerText = text.trim().toLowerCase();
 
-    // Initialize order state for new users
     if (!orderStates[sender]) {
       orderStates[sender] = { step: 'idle', cart: [], name: '' };
     }
@@ -109,7 +120,7 @@ async function startBot() {
       userState.menuItems = menuItems;
 
     // --- Add item to cart ---
-    } else if (userState.step === 'ordering' && !isNaN(lowerText)) {
+    } else if (userState.step === 'ordering' && !isNaN(lowerText) && lowerText !== '') {
       const index = parseInt(lowerText) - 1;
       const menuItems = userState.menuItems || await getMenuFromApp();
 
@@ -153,7 +164,6 @@ async function startBot() {
         await sock.sendMessage(sender, {
           text: `🎉 *Order Confirmed!*\n\nThank you! Your order has been placed.\n💰 Total: Rs. ${total}\n\n⏳ Estimated delivery: 30-45 minutes.\n\nType *menu* to order again!`
         });
-        // Reset state after order
         orderStates[sender] = { step: 'idle', cart: [], name: '' };
       }
 
