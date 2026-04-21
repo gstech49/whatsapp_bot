@@ -3,7 +3,7 @@ name: JavaGoat-WhatsApp-Bot
 on:
   workflow_dispatch:
   schedule:
-    - cron: '0 */5 * * *'  # Runs every 5 hours
+    - cron: '0 */5 * * *'
 
 jobs:
   build:
@@ -15,10 +15,16 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-         node-version: '24'   
+          node-version: '24'
 
       - name: Install Dependencies
         run: npm install
+
+      - name: Restore WhatsApp Session
+        run: |
+          echo "${{ secrets.SESSION_DATA }}" | base64 --decode > auth_info.zip
+          unzip auth_info.zip
+          echo "✅ Session restored!"
 
       - name: Start AI Bot
         env:
